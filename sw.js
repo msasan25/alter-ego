@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Bump VERSION when files change.
-const VERSION = "alter-ego-v2";
-const SHELL = ["./", "./index.html", "./app.css", "./app.js", "./data.js", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./icon-512.png"];
+const VERSION = "alter-ego-v5";
+const SHELL = ["./", "./index.html", "./app.css", "./app.js", "./data.js", "./avatars.js", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

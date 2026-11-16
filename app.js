@@ -17,6 +17,8 @@
   S.sur = S.sur || JSON.parse(JSON.stringify(DEF.sur));
   S.days = S.days || {};
   var ART = load(LSART) || {};
+  var LSVOX = "ae-vox-v1", VOX = load(LSVOX) || {};
+  function saveVox() { try { localStorage.setItem(LSVOX, JSON.stringify(VOX)); return true; } catch (e) { toast("That clip is too big to store. Try a shorter one."); return false; } }
   function load(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
   function save() { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) { toast("Couldn't save. Storage is full."); } }
   function saveArt() { try { localStorage.setItem(LSART, JSON.stringify(ART)); return true; } catch (e) { toast("That image is too big to store. Try a smaller one."); return false; } }
@@ -126,19 +128,21 @@
     return Object.keys(c).some(function (k) { return c[k]; }) ? "C" : "D";
   }
   function dailyQuote(c) {
-    var pool = Math.max(1, Math.min(c.quotes.length, Math.round(heartsOf(totals().bonds[c.id]) * c.quotes.length / 5)));
-    return c.quotes[hash(key(base()) + c.id) % pool];
+    var pool = c.quotes.concat(c.daily || []), n = Math.round(base().getTime() / 864e5);
+    return pool[n % pool.length];
   }
   function chapterNo(r) { return r.ch || 1; }
   function chapterTitle(c, r) { return c.chapters[(r.cn || 0) % c.chapters.length]; }
 
-  // ---------- Sunday surprise ----------
+  // ---------- weekend surprise box (opens Saturday, clear it Saturday or Sunday) ----------
+  function weekend() { var w = base().getDay(); return w === 6 || w === 0; }
+  function boxOpened() { surpriseIdx(); return !!S.sur.opened; }
   function surpriseIdx() {
     var wk = weekKey(base());
     if (S.sur.wk !== wk) {
       var free = []; for (var i = 0; i < D.SURPRISES.length; i++) if (S.sur.used.indexOf(i) < 0) free.push(i);
       if (!free.length) { S.sur.used = []; free = D.SURPRISES.map(function (_, i) { return i; }); }
-      S.sur = { used: S.sur.used, wk: wk, idx: free[hash(wk) % free.length], swapped: false };
+      S.sur = { used: S.sur.used, wk: wk, idx: free[hash(wk) % free.length], swapped: false, opened: false, done: "" };
       S.sur.used.push(S.sur.idx); save();
     }
     return S.sur.idx;
@@ -148,9 +152,201 @@
     var free = []; for (var i = 0; i < D.SURPRISES.length; i++) if (S.sur.used.indexOf(i) < 0) free.push(i);
     if (!free.length) return;
     S.sur.idx = free[Math.floor(Math.random() * free.length)]; S.sur.used.push(S.sur.idx); S.sur.swapped = true;
-    var r = today(); if (r) r.sx = S.sur.idx;
     save();
   }
+
+  // ---------- sound effects (synthesised, no files) ----------
+  var AC = null;
+  function actx() {
+    if (!AC) { var C = window.AudioContext || window.webkitAudioContext; if (!C) return null; AC = new C(); }
+    if (AC.state === "suspended") AC.resume();
+    return AC;
+  }
+  function tone(f, t0, dur, type, vol, f2) {
+    var a = actx(); if (!a) return;
+    var o = a.createOscillator(), g = a.createGain(), t = a.currentTime + t0;
+    o.type = type || "sine"; o.frequency.setValueAtTime(f, t); if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function noise(t0, dur, vol, from, to) {
+    var a = actx(); if (!a) return;
+    var n = Math.floor(a.sampleRate * dur), b = a.createBuffer(1, n, a.sampleRate), d = b.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    var src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain(), t = a.currentTime + t0;
+    src.buffer = b; f.type = "bandpass"; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(from, t); f.frequency.exponentialRampToValueAtTime(to, t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(a.destination); src.start(t);
+  }
+  var SFX = {
+    boom: function () { tone(110, 0, 0.6, "sine", 0.5, 40); noise(0, 0.18, 0.3, 800, 120); },
+    whoosh: function () { noise(0, 0.45, 0.25, 300, 3000); },
+    clear: function () { [784, 988, 1319].forEach(function (f, i) { tone(f, i * 0.07, 0.25, "triangle", 0.15); }); },
+    gong: function () { tone(196, 0, 1.6, "sine", 0.3, 180); tone(392, 0, 1.2, "sine", 0.12, 370); },
+    stamp: function () { tone(90, 0, 0.3, "square", 0.2, 50); noise(0, 0.12, 0.35, 1200, 200); },
+    drum: function () { for (var i = 0; i < 10; i++) tone(140, i * 0.06, 0.08, "sine", 0.18, 90); },
+    reveal: function () { [523, 659, 784, 1047, 1319].forEach(function (f, i) { tone(f, i * 0.08, 0.5, "triangle", 0.14); }); }
+  };
+  function sfx(n) { if (S.settings.sfx === false) return; try { SFX[n](); } catch (e) {} }
+  function splash(kj, title, sub) {
+    var el = document.createElement("div"); el.className = "splash"; el.setAttribute("role", "status");
+    el.innerHTML = '<div class="splash-lines" aria-hidden="true"></div><b aria-hidden="true">' + kj + "</b><strong>" + esc(title) + "</strong><span>" + esc(sub) + "</span>";
+    document.body.appendChild(el); sfx("boom"); setTimeout(function () { sfx("reveal"); }, 120);
+    var gone = false, rm = function () { if (gone) return; gone = true; el.classList.add("out"); setTimeout(function () { el.remove(); }, 300); };
+    el.addEventListener("click", rm); setTimeout(rm, 1500);
+  }
+  function burst(el) {
+    var r = el.getBoundingClientRect(), b = document.createElement("span");
+    b.className = "burst"; b.textContent = "完"; b.style.left = (r.left + 26) + "px"; b.style.top = (r.top + r.height / 2) + "px";
+    document.body.appendChild(b); setTimeout(function () { b.remove(); }, 800);
+  }
+  function playVox(id) { if (!VOX[id]) return false; try { var a = new Audio(VOX[id]); a.play().catch(function () {}); } catch (e) {} return true; }
+  var voxFor = null, voxInput = document.createElement("input");
+  voxInput.type = "file"; voxInput.accept = "audio/*"; voxInput.hidden = true; document.body.appendChild(voxInput);
+  voxInput.addEventListener("change", function () {
+    var f = voxInput.files && voxInput.files[0], id = voxFor; voxInput.value = "";
+    if (!f || !id) return;
+    if (f.size > 1500000) { toast("Keep clips under 1.5 MB (a few seconds)."); return; }
+    var fr = new FileReader();
+    fr.onload = function () { var prev = VOX[id]; VOX[id] = fr.result; if (saveVox()) { toast("Voice clip saved for " + charOf(id).short); playVox(id); } else { if (prev) VOX[id] = prev; else delete VOX[id]; } render(); };
+    fr.readAsDataURL(f);
+  });
+
+  // ---------- background music: original synth loops, one per character ----------
+  function nf(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+  var M = { on: null, timer: null, step: 0, next: 0, master: null, el: null, duck: false };
+  function mOut() { var a = actx(); if (!a) return null; if (!M.master) { M.master = a.createGain(); M.master.gain.value = 0; M.master.connect(a.destination); } return a; }
+  function mNote(f, t, dur, type, vol, opt) {
+    var a = AC; opt = opt || {};
+    var o = a.createOscillator(), g = a.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t); if (opt.bend) o.frequency.exponentialRampToValueAtTime(f * opt.bend, t + Math.min(dur, 0.25));
+    if (opt.lp) { var fl = a.createBiquadFilter(); fl.type = "lowpass"; fl.frequency.value = opt.lp; g.connect(fl); fl.connect(M.master); } else g.connect(M.master);
+    var at = opt.at || 0.005;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + at); g.gain.exponentialRampToValueAtTime(0.0001, t + Math.max(dur, at + 0.02));
+    o.connect(g); o.start(t); o.stop(t + Math.max(dur, at + 0.02) + 0.05);
+  }
+  function mNoise(t, dur, vol, type, freq) {
+    var a = AC, n = Math.max(1, Math.floor(a.sampleRate * dur)), b = a.createBuffer(1, n, a.sampleRate), d = b.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    var src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+    src.buffer = b; f.type = type; f.frequency.value = freq; g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(M.master); src.start(t);
+  }
+  function kick(t, v, hi) { mNote(hi || 110, t, 0.35, "sine", v, { bend: 0.4 }); }
+  var THEMES = {
+    gojo: { name: "Six Eyes Groove", bpm: 92, play: function (s, t, L) {
+      var bar = Math.floor(s / 16) % 4, k = s % 16, ch = [[50, 53, 57, 60], [46, 50, 53, 57], [43, 46, 50, 53], [45, 49, 52, 55]][bar];
+      if (k === 0) ch.forEach(function (m) { mNote(nf(m + 12), t, L * 16, "sawtooth", 0.018, { lp: 900, at: 0.4 }); });
+      if ([0, 6, 8, 14].indexOf(k) >= 0) mNote(nf(ch[0] - 12), t, L * 2, "triangle", 0.12);
+      if (k % 4 === 0) kick(t, 0.22);
+      if (k % 2 === 1) mNoise(t, 0.04, 0.05, "highpass", 7000);
+      if (k === 4 || k === 12) mNoise(t, 0.12, 0.07, "bandpass", 2000);
+      var mel = [74, -1, -1, 77, -1, 79, -1, -1, 81, -1, 79, -1, 77, -1, 74, -1];
+      if (bar % 2 === 1 && mel[k] > 0) mNote(nf(mel[k]), t, 0.6, "sine", 0.05);
+    } },
+    naruto: { name: "Ninja Way Taiko", bpm: 132, play: function (s, t, L) {
+      var k = s % 16, bar = Math.floor(s / 16) % 4;
+      if ([0, 3, 8, 11].indexOf(k) >= 0) kick(t, 0.3, 95);
+      if (k === 12 || k === 14) kick(t, 0.16, 180);
+      if (k % 2 === 0) mNoise(t, 0.03, 0.03, "highpass", 6000);
+      if (k === 0) mNote(nf(38), t, L * 16, "triangle", 0.06, { at: 0.05 });
+      var ph = [[62, -1, 64, -1, 67, -1, 69, 67, -1, 64, -1, 62, 64, -1, -1, -1], [62, -1, 64, -1, 67, -1, 69, -1, 71, -1, 69, 67, 69, -1, -1, -1], [74, -1, 71, -1, 69, -1, 67, 69, -1, 67, -1, 64, 62, -1, 64, -1], [67, -1, 69, -1, 71, 69, 67, -1, 64, -1, 62, -1, 62, -1, -1, -1]][bar];
+      if (ph[k] > 0) mNote(nf(ph[k]), t, 0.28, "triangle", 0.07, { bend: 0.985 });
+    } },
+    kakashi: { name: "Copy Ninja Lo-fi", bpm: 78, swing: 0.33, play: function (s, t, L) {
+      var k = s % 16, bar = Math.floor(s / 16) % 4, ch = [[53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 60], [48, 52, 55, 59]][bar];
+      if (k === 0 || k === 10) ch.forEach(function (m, i) { mNote(nf(m), t + i * 0.012, L * 6, "sine", 0.03, { at: 0.01 }); mNote(nf(m + 12), t, L * 3, "triangle", 0.008); });
+      if (k === 0 || k === 7 || k === 10) kick(t, 0.2, 90);
+      if (k === 4 || k === 12) mNoise(t, 0.16, 0.06, "bandpass", 1600);
+      if (k % 2 === 0) mNoise(t, 0.03, 0.02, "highpass", 8000);
+      if (k === 0) mNote(nf(ch[0] - 12), t, L * 8, "sine", 0.1);
+      if (k === 8) mNote(nf(ch[0] - 5), t, L * 6, "sine", 0.08);
+      if (Math.random() < 0.25) mNoise(t + Math.random() * L, 0.006, 0.02, "highpass", 3000);
+    } },
+    nezuko: { name: "Bamboo Lullaby", bpm: 66, play: function (s, t, L) {
+      var k = s % 16, bar = Math.floor(s / 16) % 4;
+      if (k === 0) { mNote(nf(40), t, L * 16, "sine", 0.06, { at: 1 }); mNote(nf(52), t, L * 16, "sine", 0.02, { at: 1.2 }); mNoise(t, L * 16, 0.012, "bandpass", 500); }
+      var ph = [[64, -1, -1, -1, 69, -1, 71, -1, 72, -1, -1, -1, 71, -1, 69, -1], [64, -1, 65, -1, 69, -1, -1, -1, 71, -1, 69, -1, 65, -1, 64, -1], [76, -1, -1, -1, 72, -1, 71, -1, 69, -1, -1, -1, 71, -1, 72, -1], [71, -1, 69, -1, 65, -1, 64, -1, -1, -1, -1, -1, -1, -1, -1, -1]][bar];
+      if (ph[k] > 0) { mNote(nf(ph[k]), t, 1.4, "triangle", 0.07); mNote(nf(ph[k] + 12), t, 0.5, "sine", 0.015); }
+    } }
+  };
+  function mTick() {
+    var a = AC, th = THEMES[M.on]; if (!a || !th || !M.timer) return;
+    var L = 60 / th.bpm / 4;
+    while (M.next < a.currentTime + 0.3) {
+      try { th.play(M.step, M.next + (M.step % 2 && th.swing ? th.swing * L : 0), L); } catch (e) {}
+      M.next += L; M.step++;
+    }
+  }
+  function mLevel() { return M.duck ? 0.2 : 0.6; }
+  function musicStop() {
+    clearInterval(M.timer); M.timer = null;
+    if (M.master && AC) { var t = AC.currentTime; M.master.gain.cancelScheduledValues(t); M.master.gain.setTargetAtTime(0, t, 0.15); }
+    if (M.el) { M.el.pause(); URL.revokeObjectURL(M.el.src); M.el = null; }
+    M.on = null;
+  }
+  function musicPlay(id) {
+    if (M.on === id) { if (AC && AC.state === "suspended") AC.resume(); if (M.el && M.el.paused) M.el.play().catch(function () {}); return; }
+    musicStop(); M.on = id;
+    bgmGet(id).then(function (blob) {
+      if (M.on !== id) return;
+      if (blob) { M.el = new Audio(URL.createObjectURL(blob)); M.el.loop = true; M.el.volume = 0.6 * mLevel(); M.el.play().catch(function () {}); return; }
+      var a = mOut(); if (!a) return;
+      var t = a.currentTime; M.master.gain.cancelScheduledValues(t); M.master.gain.setTargetAtTime(mLevel(), t + 0.05, 0.4);
+      M.step = 0; M.next = t + 0.1; M.timer = setInterval(mTick, 60); mTick();
+    });
+  }
+  function duck(on) {
+    M.duck = on;
+    if (M.master && AC && M.timer) { M.master.gain.cancelScheduledValues(AC.currentTime); M.master.gain.setTargetAtTime(mLevel(), AC.currentTime, 0.2); }
+    if (M.el) M.el.volume = 0.6 * mLevel();
+  }
+  var MUSVIEWS = ["pick", "cut", "brief", "today", "checkin", "verdict"];
+  function musicSync() {
+    var r = today(), id = view === "pick" ? tmp.pick : (r && r.c && !r.pass ? r.c : null);
+    if (S.settings.bgm === false || MUSVIEWS.indexOf(view) < 0 || document.visibilityState === "hidden") id = null;
+    if (tmp.preview && view === "bonds") return;
+    tmp.preview = null;
+    if (id) musicPlay(id); else if (M.on) musicStop();
+  }
+  document.addEventListener("pointerdown", function () {
+    if (AC && AC.state === "suspended") AC.resume();
+    if (M.el && M.el.paused) M.el.play().catch(function () {});
+    if (!M.on) musicSync();
+  }, true);
+
+  // your own BGM files live in IndexedDB (too big for localStorage)
+  var idbP = null;
+  function idb() {
+    if (!idbP) idbP = new Promise(function (res) {
+      try { var q = indexedDB.open("alter-ego", 1); q.onupgradeneeded = function () { q.result.createObjectStore("bgm"); }; q.onsuccess = function () { res(q.result); }; q.onerror = function () { res(null); }; } catch (e) { res(null); }
+    });
+    return idbP;
+  }
+  function bgmGet(id) {
+    return idb().then(function (db) {
+      if (!db) return null;
+      return new Promise(function (res) { try { var q = db.transaction("bgm").objectStore("bgm").get(id); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; } catch (e) { res(null); } });
+    });
+  }
+  function bgmSet(id, blob) {
+    return idb().then(function (db) {
+      if (!db) throw new Error("no db");
+      return new Promise(function (res, rej) { var tx = db.transaction("bgm", "readwrite"); if (blob) tx.objectStore("bgm").put(blob, id); else tx.objectStore("bgm").delete(id); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; });
+    });
+  }
+  var BGMHAS = {};
+  CH.forEach(function (c) { bgmGet(c.id).then(function (b) { if (b) { BGMHAS[c.id] = 1; if (view === "bonds") render(); } }); });
+  var bgmFor = null, bgmInput = document.createElement("input");
+  bgmInput.type = "file"; bgmInput.accept = "audio/*"; bgmInput.hidden = true; document.body.appendChild(bgmInput);
+  bgmInput.addEventListener("change", function () {
+    var f = bgmInput.files && bgmInput.files[0], id = bgmFor; bgmInput.value = "";
+    if (!f || !id) return;
+    if (f.size > 25e6) { toast("Keep the track under 25 MB."); return; }
+    bgmSet(id, f).then(function () { BGMHAS[id] = 1; if (M.on === id) musicStop(); toast("Your BGM is set for " + charOf(id).short); render(); })
+      .catch(function () { toast("Couldn't store that track on this phone."); });
+  });
 
   // ---------- voice ----------
   var synth = window.speechSynthesis, voices = [];
@@ -162,16 +358,17 @@
     return list.filter(function (v) { return /google|kyoko|otoya|natural|premium|enhanced/i.test(v.name); })[0] || list[0] || null;
   }
   var speakToken = 0;
-  function stopVoice() { speakToken++; if (synth) synth.cancel(); }
+  function stopVoice() { speakToken++; if (synth) synth.cancel(); duck(false); }
   // pairs: [[ja, en], ...]. onLine(i) fires as each line starts, onEnd when finished or stopped.
   function speak(c, pairs, onLine, onEnd) {
     stopVoice();
     var mode = S.settings.voice, tok = speakToken, i = 0;
     if (!synth || mode === "off") { if (onEnd) onEnd(); return false; }
+    duck(true);
     var lang = mode === "en" ? "en" : "ja", v = voiceFor(lang);
     function next() {
       if (tok !== speakToken) return;
-      if (i >= pairs.length) { if (onEnd) onEnd(); return; }
+      if (i >= pairs.length) { duck(false); if (onEnd) onEnd(); return; }
       var p = pairs[i], text = lang === "ja" ? p[0] : p[1];
       if (onLine) onLine(i);
       var u = new SpeechSynthesisUtterance(text);
@@ -189,7 +386,7 @@
 
   // ---------- art ----------
   function avaHTML(c, size, rad) {
-    var inner = ART[c.id] ? '<img src="' + ART[c.id] + '" alt="">' : emblem(c);
+    var inner = ART[c.id] ? '<img src="' + ART[c.id] + '" alt="">' : (c.avatar || emblem(c));
     return '<div class="ava" style="--c:' + c.c + ';width:' + size + 'px;height:' + size + 'px;border-radius:' + (rad || 16) + 'px" aria-hidden="true">' + inner + "</div>";
   }
   function emblem(c) { return '<svg viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + c.emblem + "</svg>"; }
@@ -256,10 +453,10 @@
     var r = today();
     if (!r) return "morning";
     if (r.pass || r.c) return "today";
-    if (base().getDay() === 0 && !r.sxSeen) return "surprise";
+    if (weekend() && !boxOpened()) return "box";
     return "pass";
   }
-  function go(v) { stopVoice(); clearTimeout(tmp.wrT); view = v; render(); window.scrollTo(0, 0); }
+  function go(v) { stopVoice(); clearTimeout(tmp.wrT); app.classList.remove("still"); view = v; render(); window.scrollTo(0, 0); }
   function setTheme() {
     var r = today(), id = (view === "pick" && tmp.pick) ? tmp.pick : (r && r.c);
     if (id) document.body.setAttribute("data-char", id); else document.body.removeAttribute("data-char");
@@ -273,6 +470,7 @@
     app.innerHTML = fn();
     var auto = app.querySelector("[data-autofocus]"); if (auto) auto.focus();
     if (V[view].after) V[view].after();
+    musicSync();
   }
 
   // ---------- views ----------
@@ -280,27 +478,43 @@
 
   V.morning = function () {
     var t = base(), h = new Date().getHours(), greet = h < 4 ? "Still up" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-    var sun = t.getDay() === 0, sat = t.getDay() === 6;
-    var sub = sun ? "It's Sunday. Something unusual is waiting for you today." : sat ? "Saturday. No work, no pressure. Play if you feel like it." : "A new chapter is ready when you are.";
-    return '<section class="screen speed" aria-labelledby="mh"><span class="kanji" aria-hidden="true">朝</span>' +
-      '<div class="stack"><span class="eyebrow">' + DAYN[t.getDay()] + " · " + t.getDate() + " " + MON[t.getMonth()] + '</span>' +
+    var sun = t.getDay() === 0, sat = t.getDay() === 6, dayN = Object.keys(S.days).length + (today() ? 0 : 1);
+    surpriseIdx();
+    var sub = sat ? "Saturday. No work today, and a surprise box has arrived for you." : sun ? (S.sur.done ? "Sunday. Batch day, at your own pace." : "Sunday. Your surprise quest is still open until tonight.") : "A new chapter is ready when you are.";
+    return '<section class="screen speed morning" aria-labelledby="mh"><span class="kanji" aria-hidden="true">朝</span>' +
+      '<div class="stack"><span class="eyebrow">' + DAYN[t.getDay()] + " · " + t.getDate() + " " + MON[t.getMonth()] + " · Day " + dayN + " of your story</span>" +
       '<h1 id="mh">' + greet + ", " + esc(S.name) + ".</h1><p class=\"muted\">" + sub + "</p></div>" +
       '<div class="grow" style="display:grid;place-items:center"><div class="seal" aria-hidden="true">起</div></div>' +
       '<div class="stack"><p class="small muted" style="text-align:center">Up before 7:00 checks your first floor quest.</p>' +
       '<button type="button" class="btn acc" data-act="wake" data-autofocus>I\'m up</button></div></section>';
   };
 
-  V.surprise = function () {
+  V.box = function () {
     var s = D.SURPRISES[surpriseIdx()];
-    return '<section class="screen dark" aria-labelledby="sh"><span class="kanji" aria-hidden="true">謎</span>' +
-      '<div class="stack"><span class="eyebrow">Sunday surprise · +300 XP</span><h1 id="sh">' + esc(s[0]) + "</h1></div>" +
-      '<div class="ink card" style="font-size:18px;line-height:1.5;font-weight:600">' + esc(s[1]) + "</div>" +
-      '<p class="muted small">One per week, never repeated. It sits in today\'s quests, and you can do it any time before midnight.</p>' +
+    if (!tmp.boxOpen) {
+      return '<section class="screen dark boxscr" aria-labelledby="bxh"><span class="kanji" aria-hidden="true">宝</span>' +
+        '<div class="stack"><span class="eyebrow">Weekend · surprise box</span><h1 id="bxh">Something arrived for you.</h1>' +
+        '<p class="muted">One unique side quest, never repeated. Clear it on Saturday or Sunday for +300 XP.</p></div>' +
+        '<div class="grow" style="display:grid;place-items:center"><button type="button" class="giftbox" data-act="boxOpen" aria-label="Open the surprise box" data-autofocus><span class="crate"></span><span class="lid"></span><span class="ribbon"></span></button></div>' +
+        '<p class="small muted" style="text-align:center">Tap the box to open it</p></section>';
+    }
+    return '<section class="screen dark boxscr opened" aria-labelledby="sh"><div class="rays" aria-hidden="true"></div><span class="kanji" aria-hidden="true">宝</span>' +
+      '<div class="stack"><span class="eyebrow">Surprise box · +300 XP · Saturday or Sunday</span><h1 id="sh" class="slamin">' + esc(s[0]) + "</h1></div>" +
+      '<div class="ink card popin" style="font-size:18px;line-height:1.5;font-weight:600">' + esc(s[1]) + "</div>" +
+      '<p class="muted small">It waits in your quests all weekend. Take a lazy Saturday and do it Sunday, or the other way round.</p>' +
       '<div class="grow"></div><div class="stack">' +
       '<button type="button" class="btn light" data-act="surOk" data-autofocus>Accept the mission</button>' +
       (S.sur.swapped ? '<p class="muted small" style="text-align:center">Swap used this week.</p>' : '<button type="button" class="btn outline-light" data-act="surSwap">Swap it (once a week)</button>') +
       "</div></section>";
   };
+  function surpriseHTML(r) {
+    var s = D.SURPRISES[surpriseIdx()], k = key(base());
+    if (S.sur.done && S.sur.done !== k) {
+      return '<div class="qgroup"><span class="eyebrow">Weekend surprise box</span><div class="q sxq"><span class="box" style="background:var(--acc);border-color:var(--acc)">' + ICON.check + '</span><span class="lbl"><b>' + esc(s[0]) + " · cleared yesterday</b>" + esc(s[1]) + '</span><span class="xp">+300</span></div></div>';
+    }
+    var on = !!(r.ck && r.ck.sx);
+    return '<div class="qgroup"><span class="eyebrow">Weekend surprise box · ' + (base().getDay() === 6 ? "today or tomorrow" : "last day: today") + '</span><button type="button" class="q sxq" data-act="ck" data-arg="sx" aria-pressed="' + on + '"><span class="box">' + (on ? ICON.check : "") + '</span><span class="lbl"><b>' + esc(s[0]) + "</b>" + esc(s[1]) + '</span><span class="xp">+' + (r.lucky ? 600 : 300) + "</span></button></div>";
+  }
 
   V.pass = function () {
     var d = base(), sat = d.getDay() === 6, left = 2 - passesUsed(d);
@@ -315,24 +529,38 @@
       "</div></section>";
   };
 
+  function portrait(c) { return ART[c.id] ? '<img src="' + ART[c.id] + '" alt="">' : c.avatar; }
   V.pick = function () {
-    var T = totals(), sel = tmp.pick;
-    var cards = CH.map(function (c) {
-      var h = heartsOf(T.bonds[c.id]);
-      return '<button type="button" class="pickcard" style="--c:' + c.c + ";--cd:" + c.cd + '" data-act="pick" data-arg="' + c.id + '" aria-pressed="' + (sel === c.id) + '">' +
-        avaHTML(c, 64, 14) + '<span class="nm">' + esc(c.short) + '</span><span class="bt">' + esc(c.vibe) + '</span><span class="small muted">' + esc(c.series) + " · bond " + h + "/5</span></button>";
+    var T = totals(), sel = tmp.pick, c = sel ? charOf(sel) : null, d = base();
+    var stage;
+    if (c) {
+      var h = heartsOf(T.bonds[c.id]), pips = "";
+      for (var i = 1; i <= 5; i++) pips += '<i class="' + (i <= h ? "on" : "") + '"></i>';
+      var stat = function (lab, v) { var b = ""; for (var k = 1; k <= 5; k++) b += '<i class="' + (k <= v ? "on" : "") + '"></i>'; return '<div class="stat"><span>' + lab + '</span><span class="sb" role="img" aria-label="' + lab + " " + v + ' of 5">' + b + "</span></div>"; };
+      var mv = D.MOVE[d.getDay()];
+      stage = '<div class="stage" style="--c:' + c.c + '"><div class="speedlines" aria-hidden="true"></div><div class="fig" aria-hidden="true">' + portrait(c) + "</div>" +
+        '<div class="sinfo"><span class="ser">' + esc(c.series) + '</span><p class="nmL">' + esc(c.short) + '</p><span class="vibe">' + esc(c.vibe) + "</span>" +
+        stat("Energy", c.stats[0]) + stat("Focus", c.stats[1]) + stat("Rest", c.stats[2]) +
+        '<div class="stat"><span>Bond</span><span class="pips" style="--c:#FFFFFF">' + pips + "</span></div></div>" +
+        '<div class="move"><b>Opening move</b> ' + esc(c.am[mv]) + "</div><div class=\"flash\" aria-hidden=\"true\"></div></div>";
+    } else {
+      stage = '<div class="stage empty"><p class="qm">?</p><p class="small" style="opacity:.8">Tap a fighter below</p></div>';
+    }
+    var tiles = CH.map(function (x) {
+      return '<button type="button" class="tile" style="--c:' + x.c + '" data-act="pick" data-arg="' + x.id + '" aria-pressed="' + (sel === x.id) + '" aria-label="' + esc(x.name) + '">' + portrait(x) + "<span>" + esc(x.short) + "</span></button>";
     }).join("");
-    return '<section class="screen" aria-labelledby="pkh"><span class="kanji" aria-hidden="true">選</span>' +
-      '<div class="stack"><span class="eyebrow">How\'s your battery?</span><h1 id="pkh">Who are you today?</h1></div>' +
-      '<div class="pickgrid">' + cards + "</div>" +
-      '<button type="button" class="btn ghost sm" style="align-self:center" data-act="fate">Let fate decide</button>' +
-      '<div class="grow"></div><button type="button" class="btn acc" data-act="start"' + (sel ? "" : " disabled") + ">" + (sel ? "Begin as " + esc(charOf(sel).short) : "Pick a character") + "</button></section>";
+    return '<section class="screen dark sel" aria-labelledby="pkh"><span class="kanji" aria-hidden="true">選</span>' +
+      '<div class="between"><div class="stack" style="gap:2px"><span class="eyebrow">Player 1 · ' + esc(S.name) + '</span><h2 id="pkh">Select your alter ego</h2></div>' +
+      '<button type="button" class="btn outline-light sm" data-act="fate">Random</button></div>' +
+      stage + '<div class="tiles">' + tiles + "</div>" +
+      '<div class="grow"></div><button type="button" class="btn ' + (c ? "acc" : "light") + '" data-act="start"' + (c ? "" : " disabled") + ">" + (c ? "Select " + esc(c.short) : "Choose a fighter") + "</button></section>";
   };
 
   V.cut = function () {
     var r = today(), c = charOf(r.c);
-    var panel = ART[c.id] ? '<img src="' + ART[c.id] + '" alt="">' : emblem(c);
+    var panel = ART[c.id] ? '<img src="' + ART[c.id] + '" alt="">' : (c.avatar || emblem(c));
     return '<section class="screen cut" style="--c:' + c.c + '" data-act="toBrief" role="button" tabindex="0" aria-label="Tap to start the briefing" data-autofocus>' +
+      '<div class="cold" aria-hidden="true"><b>第' + chapterNo(r) + '話</b><small>EPISODE ' + chapterNo(r) + "</small></div><div class=\"bang\" aria-hidden=\"true\"></div>" +
       '<div class="speedlines" aria-hidden="true"></div>' +
       '<span class="ctag">Chapter ' + chapterNo(r) + "</span>" +
       '<div class="panel" aria-hidden="true">' + panel + "</div>" +
@@ -348,7 +576,7 @@
     if (P.load !== "free" || d.getDay() !== 6) L.push([P.lite ? "夜は短く一回だけ集中。" : "夜は集中タイム。", "Tonight: " + Q.pm]);
     L.push(["今日の誓いも忘れずに。", "Your vow: " + c.vow]);
     L.push(["今日のひねりもあるよ。", "Daily twist: " + D.TWISTS[r.t % D.TWISTS.length]]);
-    if (d.getDay() === 0) L.push(["それと、日曜日のサプライズを忘れるな。", "And don't forget your Sunday surprise: " + D.SURPRISES[r.sx][0] + "."]);
+    if (weekend() && !S.sur.done) L.push(["それと、週末のサプライズ任務を忘れるな。", "And this weekend's surprise quest: " + D.SURPRISES[surpriseIdx()][0] + "."]);
     if (r.lucky) L.push(["しかも今日はラッキー巻物、経験値二倍だ！", "And it's a lucky scroll today. Every XP counts double!"]);
     L.push(c.outro);
     return L;
@@ -383,6 +611,7 @@
     if (r.pass) {
       return '<section class="screen has-tabs"><span class="kanji" aria-hidden="true">休</span>' + top +
         '<div class="stack"><h1>' + (r.pass === "sat" ? "Rest day." : "Pass day.") + '</h1><p class="muted">' + (r.pass === "sat" ? "Saturday is off. Sleep in, eat well, watch something good." : "Streak is safe. Rest properly, and come back tomorrow for a new chapter.") + "</p></div>" + xpbar +
+        (weekend() ? surpriseHTML(r) : "") +
         '<button type="button" class="btn ghost" data-act="unpass">Changed my mind, play today</button></section>' + tabs("today");
     }
     var c = charOf(r.c), P = planFor(d), Q = questsFor(c, P, d), q = dailyQuote(c), ck = r.ck || {};
@@ -395,10 +624,7 @@
       '<div class="row">' + avaHTML(c, 64, 16) + '<div class="stack" style="gap:2px;min-width:0"><span class="eyebrow">Chapter ' + chapterNo(r) + " · " + esc(c.short) + '</span><h2>' + esc(chapterTitle(c, r)) + "</h2></div></div>" + xpbar;
     if (r.lucky) h += '<div class="lucky">Lucky scroll: every quest gives double XP today.</div>';
     h += '<button type="button" class="quote" data-act="hearQuote" style="all:unset;cursor:pointer;display:block;border-left:4px solid var(--acc);padding:4px 0 4px 12px"><q>' + esc(q[0]) + "</q><span>" + esc(q[1]) + " · tap to hear it in Japanese</span></button>";
-    if (d.getDay() === 0) {
-      var s = D.SURPRISES[r.sx];
-      h += '<div class="qgroup"><span class="eyebrow">Sunday surprise</span>' + qb("sx", esc(s[0]), s[1], 300) + "</div>";
-    }
+    if (weekend()) h += surpriseHTML(r);
     h += '<div class="qgroup"><span class="eyebrow">Floor · keeps the streak</span>' +
       qb("f1", "Wake", "Up before 7:00", 5) + qb("f2", "Move", "10 minutes of movement, or the full " + D.MOVETXT[Q.mv].toLowerCase(), 5) + qb("f3", "Learn", Q.learn, 5) + "</div>";
     h += '<div class="qgroup"><span class="eyebrow">' + esc(c.short) + "'s quests</span>" +
@@ -431,13 +657,13 @@
     var r = today(), c = charOf(r.c), rk = r.v || rankFor(r), si = streak();
     var n = Object.keys(r.ck || {}).filter(function (k) { return r.ck[k]; }).length;
     var tm = addDays(base(), 1);
-    return '<section class="screen speed" aria-labelledby="vh"><span class="kanji" aria-hidden="true">判</span>' +
+    return '<section class="screen speed verdictscr" aria-labelledby="vh"><span class="kanji" aria-hidden="true">判</span>' +
       hdr("today", "Chapter " + chapterNo(r) + " ends") +
       '<div style="display:grid;place-items:center;padding:16px 0"><div class="rank" role="img" aria-label="' + rk + ' rank">' + rk + "</div></div>" +
       '<h1 id="vh" style="text-align:center">' + { S: "S-rank. Perfect day.", A: "A-rank. Strong day.", B: "B-rank. Floor kept.", C: "C-rank. Halfway.", D: "D-rank. Rest and reset." }[rk] + "</h1>" +
       '<div class="ink card row">' + avaHTML(c, 44, 22) + '<p style="font-weight:600">"' + esc(c.verdict[rk][1]) + '"</p></div>' +
       '<div class="stats3"><div class="ink"><b>' + dayXP(r) + "</b><span>XP today</span></div><div class=\"ink\"><b>" + n + "</b><span>quests done</span></div><div class=\"ink\"><b>" + si + "</b><span>day streak</span></div></div>" +
-      '<p class="muted small" style="text-align:center">Tomorrow is a ' + D.MOVETXT[D.MOVE[tm.getDay()]].toLowerCase() + " day" + (tm.getDay() === 0 ? ", and Sunday brings a surprise." : tm.getDay() === 6 ? ", and it's Saturday: rest." : ".") + "</p>" +
+      '<p class="muted small" style="text-align:center">Tomorrow is a ' + D.MOVETXT[D.MOVE[tm.getDay()]].toLowerCase() + " day" + (tm.getDay() === 6 ? ", and Saturday brings a surprise box." : ".") + "</p>" +
       '<div class="grow"></div><div class="two"><button type="button" class="btn ghost" data-act="hearVerdict">Hear it again</button><button type="button" class="btn acc" data-act="tab" data-arg="today">Done</button></div></section>';
   };
 
@@ -487,11 +713,16 @@
         '<div class="row" style="gap:6px;flex-wrap:wrap">' +
         '<button type="button" class="btn ghost sm" data-act="art" data-arg="' + c.id + '">' + (ART[c.id] ? "Change art" : "Add art") + "</button>" +
         (ART[c.id] ? '<button type="button" class="btn ghost sm" data-act="artDel" data-arg="' + c.id + '">Remove</button>' : "") +
-        '<button type="button" class="btn ghost sm" data-act="line" data-arg="' + c.id + '">Hear a line</button></div></div></div>';
+        '<button type="button" class="btn ghost sm" data-act="line" data-arg="' + c.id + '">Hear a line</button>' +
+        '<button type="button" class="btn ghost sm" data-act="bgmPrev" data-arg="' + c.id + '">♪ ' + (BGMHAS[c.id] ? "Play my BGM" : esc(THEMES[c.id].name)) + "</button>" +
+        '<button type="button" class="btn ghost sm" data-act="bgm" data-arg="' + c.id + '">' + (BGMHAS[c.id] ? "Change my BGM" : "Use my own BGM") + "</button>" +
+        (BGMHAS[c.id] ? '<button type="button" class="btn ghost sm" data-act="bgmDel" data-arg="' + c.id + '">Back to theme</button>' : "") +
+        '<button type="button" class="btn ghost sm" data-act="vox" data-arg="' + c.id + '">' + (VOX[c.id] ? "Change voice clip" : "Add voice clip") + "</button>" +
+        (VOX[c.id] ? '<button type="button" class="btn ghost sm" data-act="voxPlay" data-arg="' + c.id + '">Play clip</button><button type="button" class="btn ghost sm" data-act="voxDel" data-arg="' + c.id + '">Remove clip</button>' : "") + "</div></div></div>";
     }).join("");
     return '<section class="screen has-tabs"><span class="kanji" aria-hidden="true">絆</span>' +
       hdr("", "Bonds", '<button type="button" class="iconbtn" data-act="go" data-arg="settings" aria-label="Settings">' + ICON.gear + "</button>") +
-      '<p class="small muted">Play a character to grow your bond. Each level unlocks a new line and more quotes. Art you add stays on this phone only.</p>' +
+      '<p class="small muted">Play a character to grow your bond. Each level unlocks a new line. Art and voice clips you add stay on this phone only, and a clip plays when that character\'s episode opens.</p>' +
       list + "</section>" + tabs("bonds");
   };
 
@@ -522,6 +753,8 @@
     h += '<div class="effect" id="effect">' + esc(effectText()) + "</div>" +
       '<div class="ink card"><div class="setrow"><label for="vsel">Briefing voice</label><select id="vsel" data-set="voice" style="font-weight:700;border:2px solid var(--line);border-radius:10px;height:40px;background:var(--ground)">' +
       [["ja", "Japanese"], ["en", "English"], ["off", "Off"]].map(function (o) { return '<option value="' + o[0] + '"' + (T.voice === o[0] ? " selected" : "") + ">" + o[1] + "</option>"; }).join("") + "</select></div>" +
+      '<div class="setrow"><label for="bgsel">Background music</label><select id="bgsel" data-set="bgm" style="font-weight:700;border:2px solid var(--line);border-radius:10px;height:40px;background:var(--ground)"><option value="on"' + (T.bgm !== false ? " selected" : "") + '>On</option><option value="off"' + (T.bgm === false ? " selected" : "") + ">Off</option></select></div>" +
+      '<div class="setrow"><label for="fxsel">Sound effects</label><select id="fxsel" data-set="sfx" style="font-weight:700;border:2px solid var(--line);border-radius:10px;height:40px;background:var(--ground)"><option value="on"' + (T.sfx !== false ? " selected" : "") + '>On</option><option value="off"' + (T.sfx === false ? " selected" : "") + ">Off</option></select></div>" +
       '<div class="setrow"><span>Text</span><b>English</b></div><div class="setrow"><span>New day starts</span><b>4:00 am</b></div>' +
       '<p class="small muted" style="padding:8px 0">' + (!synth ? "This browser has no speech voices, so briefings show text only." : jv ? "Japanese voice found: " + esc(jv.name) + "." : "No Japanese voice found yet. On Android: Settings › Text-to-speech › install Japanese. On iPhone: Settings › Accessibility › Spoken Content › Voices › Japanese.") + "</p>" +
       '<button type="button" class="btn ghost sm" data-act="testVoice">Test voice</button></div>' +
@@ -541,7 +774,7 @@
       if (r.win) wins.push(r.win);
     });
     var topId = Object.keys(cnt).sort(function (a, b) { return cnt[b] - cnt[a]; })[0], top = topId ? charOf(topId) : CH[0];
-    var tm = addDays(base(), 7 - ((base().getDay() + 6) % 7)), nextSur = "A new Sunday surprise";
+    var tm = addDays(base(), 7 - ((base().getDay() + 6) % 7)), nextSur = "A new surprise box";
     return [
       { c: "#14161C", big: "Volume " + vol, sub: "Your week, as a story. Tap to turn the page." },
       { c: top.c, big: played + " chapter" + (played === 1 ? "" : "s"), sub: topId ? "Most played: " + top.short + ", " + cnt[topId] + " time" + (cnt[topId] === 1 ? "" : "s") + "." : "No chapters yet. Next week is wide open." },
@@ -565,13 +798,23 @@
     var d = base(), k = key(d), h = new Date().getHours() + new Date().getMinutes() / 60;
     var r = { wake: Date.now(), ck: {}, t: hash(k + "tw") % D.TWISTS.length, lucky: hash(k + "lk") % 7 === 0 ? 1 : 0 };
     if (h >= 4 && h < 7) r.ck.f1 = 1;
-    if (d.getDay() === 0) r.sx = surpriseIdx();
     S.days[k] = r; save(); return r;
   }
   var A = {
-    wake: function () { var r = today() || newRec(); buzz(20); go(base().getDay() === 0 && !r.sxSeen ? "surprise" : "pass"); },
-    surOk: function () { var r = today(); r.sxSeen = 1; r.sx = S.sur.idx; save(); go("pass"); },
-    surSwap: function () { swapSurprise(); render(); toast("Swapped. This one is final for the week."); },
+    wake: function () { today() || newRec(); buzz(20); sfx("gong"); go(weekend() && !boxOpened() ? "box" : "pass"); },
+    boxOpen: function (a, el) {
+      if (tmp.boxBusy) return; tmp.boxBusy = true;
+      el.classList.add("opening"); sfx("drum"); buzz([20, 40, 20, 40, 60]);
+      setTimeout(function () { tmp.boxBusy = false; tmp.boxOpen = true; render(); sfx("boom"); sfx("reveal"); confetti(110); }, 900);
+    },
+    surOk: function () { S.sur.opened = true; tmp.boxOpen = false; save(); go(today().c || today().pass ? "today" : "pass"); },
+    surSwap: function () { swapSurprise(); sfx("whoosh"); render(); toast("Swapped. This one is final for the week."); },
+    vox: function (a) { voxFor = a; voxInput.click(); },
+    bgm: function (a) { bgmFor = a; bgmInput.click(); },
+    bgmDel: function (a) { bgmSet(a, null).then(function () { delete BGMHAS[a]; if (M.on === a) musicStop(); render(); toast("Back to " + THEMES[a].name); }); },
+    bgmPrev: function (a) { if (M.on === a) { musicStop(); tmp.preview = null; return; } tmp.preview = a; musicPlay(a); toast("Playing " + (BGMHAS[a] ? "your BGM" : THEMES[a].name) + ". Tap again to stop."); },
+    voxPlay: function (a) { playVox(a); },
+    voxDel: function (a) { delete VOX[a]; saveVox(); render(); toast("Voice clip removed"); },
     cont: function () { tmp.pick = null; go("pick"); },
     pass: function (a) { var r = today(); r.pass = a === "sat" ? "sat" : 1; save(); go("today"); },
     unpass: function () { var r = today(); delete r.pass; save(); go("pick"); },
@@ -579,7 +822,7 @@
     fate: function () {
       var i = 0, n = 10, iv = setInterval(function () {
         tmp.pick = CH[Math.floor(Math.random() * CH.length)].id; render(); buzz(6);
-        if (++i >= n) { clearInterval(iv); toast("Fate picked " + charOf(tmp.pick).short); }
+        if (++i >= n) { clearInterval(iv); buzz(30); toast("Fate picked " + charOf(tmp.pick).short); }
       }, 110);
     },
     start: function () {
@@ -587,6 +830,9 @@
       var r = today(), prev = 0, cn = 0;
       Object.keys(S.days).forEach(function (k) { var x = S.days[k]; if (x !== r && x.c) { prev++; if (x.c === tmp.pick) cn++; } });
       r.c = tmp.pick; r.ch = prev + 1; r.cn = cn; save(); go("cut");
+      var id = r.c; sfx("boom");
+      setTimeout(function () { if (view === "cut") sfx("whoosh"); }, 1350);
+      setTimeout(function () { if (view === "cut") { sfx("boom"); sfx("gong"); playVox(id); } }, 2050);
     },
     toBrief: function () { go("brief"); playBrief(); },
     briefPlay: function () { if (tmp.playing) { stopVoice(); tmp.playing = false; var w = document.getElementById("wave"); if (w) w.classList.remove("on"); document.getElementById("bp").innerHTML = ICON.play; } else playBrief(); },
@@ -595,14 +841,16 @@
     ck: function (a, el) {
       var r = today(), before = lvOf(totals().xp); r.ck = r.ck || {};
       var was = !!r.ck[a]; if (was) delete r.ck[a]; else r.ck[a] = 1;
+      if (a === "sx") S.sur.done = was ? "" : key(base());
       save(); var after = lvOf(totals().xp);
-      var y = window.scrollY; render(); window.scrollTo(0, y);
+      var y = window.scrollY; app.classList.add("still"); render(); window.scrollTo(0, y);
       if (!was) {
-        buzz(); var nb = app.querySelector('[data-arg="' + a + '"]'); if (nb) { floatXP(nb, nb.querySelector(".xp").textContent + " XP"); nb.focus({ preventScroll: true }); }
-        if (a === "sx") confetti(120);
-        if (after > before) { confetti(70); toast("Level up! Lv " + after + " · " + rankOf(after)); }
-        else if (floorDone(r) && ["f1", "f2", "f3"].indexOf(a) >= 0) toast("Floor kept. Streak is safe.");
-        else if (allDone(r)) toast("Every quest done. S-rank is yours.");
+        buzz(); var nb = app.querySelector('[data-arg="' + a + '"]'); if (nb) { floatXP(nb, nb.querySelector(".xp").textContent + " XP"); burst(nb); nb.focus({ preventScroll: true }); }
+        if (a === "sx") { confetti(140); splash("宝", "Surprise cleared", "+300 XP. A legendary weekend."); }
+        else if (after > before) { confetti(70); splash("昇", "Level up", "Lv " + after + " · " + rankOf(after)); }
+        else if (allDone(r)) { confetti(90); splash("極", "All quests clear", "S-rank is yours today"); }
+        else if (floorDone(r) && ["f1", "f2", "f3"].indexOf(a) >= 0) splash("守", "Floor kept", "Your streak is safe");
+        else sfx("clear");
       } else { var nb2 = app.querySelector('[data-arg="' + a + '"]'); if (nb2) nb2.focus({ preventScroll: true }); }
     },
     hearQuote: function () { var r = today(), c = charOf(r.c), q = dailyQuote(c); if (!speak(c, [[q[2], q[0]]])) toast(S.settings.voice === "off" ? "Voice is off in Settings." : "No speech voice on this device."); },
@@ -611,7 +859,11 @@
       r.mood = a; r.msgs = (r.msgs || []).concat([{ w: "u", t: lab }, { w: "c", t: c.mood[a][1] + " " + c.winq[1] }]);
       save(); render(); speak(c, [c.mood[a], c.winq]);
     },
-    verdict: function () { var r = today(), c = charOf(r.c), rk = rankFor(r); r.v = rk; save(); go("verdict"); buzz([30, 40, 30]); if (rk === "S" || rk === "A") confetti(rk === "S" ? 110 : 50); speak(c, [c.verdict[rk]]); },
+    verdict: function () {
+      var r = today(), c = charOf(r.c), rk = rankFor(r); r.v = rk; save(); go("verdict"); sfx("drum");
+      setTimeout(function () { sfx("stamp"); sfx("boom"); buzz([30, 40, 30]); if (rk === "S" || rk === "A") confetti(rk === "S" ? 110 : 50); }, 620);
+      setTimeout(function () { if (view === "verdict") speak(c, [c.verdict[rk]]); }, 1100);
+    },
     hearVerdict: function () { var r = today(), c = charOf(r.c); speak(c, [c.verdict[r.v || rankFor(r)]]); },
     wrapped: function () { tmp.wr = 0; go("wrapped"); },
     wrNext: function () { clearTimeout(tmp.wrT); nextWr(); },
@@ -629,7 +881,7 @@
     },
     testVoice: function () { var r = today(), c = charOf((r && r.c) || "gojo"); if (!speak(c, [c.intro])) toast(S.settings.voice === "off" ? "Voice is off." : "No speech voice on this device."); },
     export: function () {
-      var blob = new Blob([JSON.stringify({ app: "alter-ego", v: 1, state: S, art: ART })], { type: "application/json" });
+      var blob = new Blob([JSON.stringify({ app: "alter-ego", v: 1, state: S, art: ART, vox: VOX })], { type: "application/json" });
       var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "alter-ego-backup-" + key(base()) + ".json";
       document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
       toast("Backup saved to your downloads");
@@ -637,7 +889,7 @@
     import: function () { document.getElementById("importInput").click(); },
     reset: function () {
       if (!tmp.resetArm) { tmp.resetArm = true; render(); setTimeout(function () { tmp.resetArm = false; if (view === "settings") render(); }, 4000); return; }
-      tmp.resetArm = false; S = JSON.parse(JSON.stringify(DEF)); ART = {}; save(); saveArt(); toast("Everything erased"); go("morning");
+      tmp.resetArm = false; S = JSON.parse(JSON.stringify(DEF)); ART = {}; VOX = {}; save(); saveArt(); saveVox(); CH.forEach(function (c) { bgmSet(c.id, null).catch(function () {}); }); BGMHAS = {}; toast("Everything erased"); go("morning");
     }
   };
   document.getElementById("importInput").addEventListener("change", function (e) {
@@ -645,7 +897,7 @@
     f.text().then(function (t) {
       var o = JSON.parse(t); if (!o || o.app !== "alter-ego" || !o.state || !o.state.days) throw new Error("bad");
       S = o.state; S.settings = Object.assign({}, DEF.settings, S.settings || {}); S.sur = S.sur || JSON.parse(JSON.stringify(DEF.sur));
-      ART = o.art || {}; save(); saveArt(); toast("Backup restored"); view = ""; render();
+      ART = o.art || {}; VOX = o.vox || {}; save(); saveArt(); saveVox(); toast("Backup restored"); view = ""; render();
     }).catch(function () { toast("That file isn't an Alter Ego backup."); });
   });
 
@@ -669,6 +921,8 @@
     var T = S.settings, v = t.value;
     if (p === "name") S.name = v.trim() || "Sphinx";
     else if (p === "voice") T.voice = v;
+    else if (p === "sfx") { T.sfx = v === "on"; if (T.sfx) sfx("clear"); }
+    else if (p === "bgm") { T.bgm = v === "on"; musicSync(); }
     else { var bits = p.split("."); if (bits[1] !== "name" && !v) return; T[bits[0]][bits[1]] = v; }
     save();
     var ef = document.getElementById("effect"); if (ef) ef.textContent = effectText();
@@ -678,7 +932,7 @@
   // Day rolls over at 4 am while the app sits open.
   var lastKey = key(base());
   setInterval(function () { var k = key(base()); if (k !== lastKey) { lastKey = k; view = ""; render(); } }, 60000);
-  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") { var k = key(base()); if (k !== lastKey) { lastKey = k; view = ""; render(); } } });
+  document.addEventListener("visibilitychange", function () { musicSync(); if (document.visibilityState === "visible") { var k = key(base()); if (k !== lastKey) { lastKey = k; view = ""; render(); } } });
 
   render();
 })();

@@ -230,3 +230,84 @@ window.AE_DATA = (function () {
 
   return { CHARS: CHARS, TWISTS: TWISTS, SURPRISES: SURPRISES, MOVE: MOVE, MOVETXT: MOVETXT, MOVEJA: MOVEJA, MOVELITE: MOVELITE, RANKS: RANKS, HEARTS: HEARTS };
 })();
+
+// Daily words: original lines in each character's spirit, so there's a fresh quote every day.
+(function () {
+  var DAILY = {
+    gojo: [
+      ["Being strong is boring if you never use it. Go use it.", "強いのに使わないなんて退屈だろ。使いに行こう。"],
+      ["The hard part isn't the task. It's starting. Start.", "難しいのはタスクじゃない。始めることだ。始めよう。"],
+      ["Nobody's watching. Do it well anyway.", "誰も見てなくても、ちゃんとやろう。"],
+      ["Infinity is just a fancy word for 'not today, distractions.'", "無限ってのは「今日は邪魔するな」って意味さ。"],
+      ["Confidence is a habit. Practise it at breakfast.", "自信は習慣だ。朝ごはんから練習しよう。"],
+      ["You don't need motivation. You need the first five minutes.", "やる気はいらない。最初の五分だけでいい。"],
+      ["Win the morning and the day can't touch you.", "朝を制すれば、一日は君に触れられない。"],
+      ["Rest like you mean it. Then come back stronger.", "本気で休め。そしてもっと強くなって戻れ。"],
+      ["Ten focused minutes beat an hour of pretending.", "集中した十分は、ふりをした一時間に勝つ。"],
+      ["Make the hard thing look easy. That's the whole trick.", "難しいことを簡単そうにやる。それだけさ。"],
+      ["If it scares you a little, it's probably the right quest.", "ちょっと怖いなら、たぶんそれが正しいクエストだ。"],
+      ["Strong people say no to small things to say yes to big ones.", "強い奴は、大きなことのために小さなことを断る。"],
+      ["Your phone is not your domain. Your focus is.", "スマホは君の領域じゃない。集中が君の領域だ。"],
+      ["Smile while you work. It confuses the problem.", "笑いながらやれ。問題が混乱するから。"],
+      ["Today, be the person yesterday's you was hoping for.", "今日は、昨日の君が期待してた君になろう。"],
+      ["Don't chase perfect. Chase done, then upgrade.", "完璧を追うな。まず終わらせて、それから磨け。"]
+    ],
+    naruto: [
+      ["One more page. One more rep. That's how legends start.", "あと一ページ、あと一回。伝説はそうやって始まる。"],
+      ["Nobody believed in me at first either. Believe in yourself first.", "最初はオレも誰にも信じてもらえなかった。まず自分を信じろ。"],
+      ["Falling down is part of training. Staying down isn't.", "転ぶのも修行のうち。でも倒れたままはダメだ。"],
+      ["A promise to yourself is still a promise!", "自分との約束も、約束だってばよ！"],
+      ["Eat well, train hard, sleep like a log!", "よく食べて、よく修行して、ぐっすり寝ろ！"],
+      ["Small steps every day beat one giant jump.", "毎日の小さな一歩は、一回の大ジャンプに勝つ。"],
+      ["If it's hard, it means you're getting stronger.", "キツいってことは、強くなってるってことだ。"],
+      ["Don't compare. Your path is your own ninja way.", "比べるな。お前の道はお前だけの忍道だ。"],
+      ["Shout your goal out loud. Then you have to do it!", "目標を大声で言え。そしたらやるしかねえ！"],
+      ["Even a slow ninja reaches the village if they keep walking.", "歩き続ければ、遅い忍者でも里に着く。"],
+      ["Friends make the hard days lighter. Message one today.", "仲間がいればキツい日も軽くなる。今日は誰かに連絡しろ。"],
+      ["Today's sweat is tomorrow's power.", "今日の汗は明日の力だ。"],
+      ["Got knocked down yesterday? Today's a rematch!", "昨日やられた？今日はリベンジだ！"],
+      ["Never give up halfway. Finish it, then rest.", "途中であきらめるな。終わらせてから休め。"],
+      ["Ramen tastes better after a hard day's work.", "頑張った日のラーメンは最高にうまい。"],
+      ["You're closer than you think. Keep going!", "思ってるより近いぞ。行け！"]
+    ],
+    kakashi: [
+      ["Read the manual first. Then improvise.", "まず説明書を読め。それから即興だ。"],
+      ["Calm hands make clean work.", "落ち着いた手が、きれいな仕事をする。"],
+      ["Copy someone great today. Make it yours tomorrow.", "今日は誰かすごい人をまねろ。明日は自分のものにしろ。"],
+      ["The best plan is the one you actually follow.", "一番いい計画は、実際に続けられる計画だ。"],
+      ["Slow is smooth. Smooth is fast.", "ゆっくりは滑らか。滑らかは速い。"],
+      ["Ten pages a day is a library a year.", "一日十ページで、一年で図書館になる。"],
+      ["Check on your teammates. Then check on yourself.", "仲間を気にかけろ。それから自分もな。"],
+      ["Don't rush the lesson. Repeat it.", "学びを急ぐな。繰り返せ。"],
+      ["One tab. One task. One coffee.", "タブ一つ、タスク一つ、コーヒー一杯。"],
+      ["Notice what you're avoiding. That's today's mission.", "避けているものに気づけ。それが今日の任務だ。"],
+      ["A good ninja knows when to retreat and rest.", "いい忍は、引いて休む時を知っている。"],
+      ["Lazy is fine, if the important thing is done.", "大事なことが終わってれば、のんびりでいい。"],
+      ["Mistakes are just notes for next time.", "失敗は次のためのメモだ。"],
+      ["Quiet effort is still effort.", "静かな努力も、努力だ。"],
+      ["Teach what you learned. You'll learn it twice.", "学んだことを教えろ。二度学べる。"],
+      ["Five minutes of planning saves an hour of chaos.", "五分の計画は、一時間の混乱を防ぐ。"]
+    ],
+    nezuko: [
+      ["Mmm! (Drink some water first.)", "んー！（まずはお水を飲んで）"],
+      ["Mmm. (Gentle is still strong.)", "ん。（やさしいのも強さだよ）"],
+      ["Mmm-mm! (Don't skip breakfast.)", "んーん！（朝ごはんは抜かないで）"],
+      ["Mmm! (Protect the people you love, including you.)", "んー！（大切な人を守ろう。自分もね）"],
+      ["Mmm. (A short nap is a quest too.)", "ん。（短いお昼寝もクエストだよ）"],
+      ["Mmm! (Five minutes of sunlight on your face.)", "んー！（五分だけ日の光を浴びよう）"],
+      ["Mmm. (Little by little is still moving forward.)", "ん。（少しずつでも前に進んでる）"],
+      ["Mmm-mm. (No screens in bed tonight.)", "んーん。（今夜はベッドでスマホなし）"],
+      ["Mmm! (Say thank you to someone today.)", "んー！（今日は誰かにありがとうを言おう）"],
+      ["Mmm. (Breathe in for four, out for six.)", "ん。（四秒吸って、六秒吐いて）"],
+      ["Mmm! (You're doing better than you think.)", "んー！（思ってるよりずっと頑張ってるよ）"],
+      ["Mmm. (Rest is not losing.)", "ん。（休むのは負けじゃない）"],
+      ["Mmm! (Stretch like a cat when you wake up.)", "んー！（起きたら猫みたいに伸びをしよう）"],
+      ["Mmm. (A warm bath fixes a lot.)", "ん。（あったかいお風呂は、たいていのことを治す）"],
+      ["Mmm!! (Family first, always.)", "んーっ！（いつだって家族が一番）"],
+      ["Mmm. (Tomorrow is a fresh scroll.)", "ん。（明日は新しい巻物だよ）"]
+    ]
+  };
+  window.AE_DATA.CHARS.forEach(function (c) {
+    c.daily = DAILY[c.id].map(function (q) { return [q[0], c.short + " · today's words", q[1]]; });
+  });
+})();
